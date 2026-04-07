@@ -4,10 +4,40 @@ import argparse
 
 
 # ---------------------------------------------------------------------------
-# SAFE DEDUP (kun 100% ens + beskyt tabeldata)
+# RULES 🔥
 # ---------------------------------------------------------------------------
 
-def deduplicate_safe(lines):
+def has_letters(line):
+    return bool(re.search(r"[a-zA-ZæøåÆØÅ]", line))
+
+
+def is_numeric_line(line):
+    return bool(re.fullmatch(r"[\d\.,\s]+", line))
+
+
+def should_deduplicate(line):
+    l = line.lower().strip()
+
+    # Bevar vigtige målinger
+    if "min" in l or "%" in l:
+        return False
+
+    # Bevar rene tal (typisk tabeldata)
+    if is_numeric_line(l):
+        return False
+
+    # Dedup KUN metadata-linjer
+    if has_letters(l) and ":" in l:
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# DEDUP
+# ---------------------------------------------------------------------------
+
+def deduplicate_controlled(lines):
     seen = set()
     result = []
 
@@ -17,21 +47,18 @@ def deduplicate_safe(lines):
         if not clean:
             continue
 
-        # 🔥 BEVAR korte linjer (typisk tal i tabeller)
-        if len(clean) < 15:
-            result.append(clean)
-            continue
-
-        # Fjern kun hvis 100% identisk OG lang nok til at være støj
-        if clean not in seen:
-            seen.add(clean)
+        if should_deduplicate(clean):
+            if clean not in seen:
+                seen.add(clean)
+                result.append(clean)
+        else:
             result.append(clean)
 
     return result
 
 
 # ---------------------------------------------------------------------------
-# REMOVE HEADER/FOOTER SPAM (men forsigtigt)
+# REMOVE HEADER/FOOTER SPAM (stadig safe)
 # ---------------------------------------------------------------------------
 
 def remove_repeated_blocks(lines, min_repeats=5):
@@ -42,7 +69,7 @@ def remove_repeated_blocks(lines, min_repeats=5):
 
     result = []
     for line in lines:
-        # Fjern kun hvis det er LANG tekst der gentages mange gange
+        # Fjern kun lange gentagelser (header/footer)
         if len(line.strip()) > 30 and counts[line] >= min_repeats:
             continue
         result.append(line)
@@ -51,7 +78,7 @@ def remove_repeated_blocks(lines, min_repeats=5):
 
 
 # ---------------------------------------------------------------------------
-# SPLIT TABLES (bevar værdier!)
+# SPLIT TABLES (bevar data!)
 # ---------------------------------------------------------------------------
 
 def split_tables(lines):
@@ -88,11 +115,11 @@ def clean_text(text):
     # 1. split tabeller
     lines = split_tables(lines)
 
-    # 2. fjern header/footer spam
+    # 2. fjern header/footer
     lines = remove_repeated_blocks(lines)
 
-    # 3. SAFE dedup
-    lines = deduplicate_safe(lines)
+    # 3. kontrolleret dedup
+    lines = deduplicate_controlled(lines)
 
     # 4. join
     text = "\n".join(lines)
