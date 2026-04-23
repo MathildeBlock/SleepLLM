@@ -41,24 +41,25 @@ ALPHA_MIN_OBSERVATIONER = 10
 SKIP_FELTER = {
     "metadata.filnavn",
     "metadata.udfyldt_af",
-    "metadata.model_parametre",
 }
 
 FRITEKST_FELTER = {
     "klinisk_information.klinisk_resume",
     "klinisk_information.kommentar",
     "klinisk_information.patient_oplysninger_ved_optagelse",
+    "sammenfatning.soevnmoenster",
+    "sammenfatning.soevn_dagtid",
+    "sammenfatning.anfald",
+    "sammenfatning.beskrivelse",
+    "sammenfatning.paroksystisk_aktivitet",
+    "sammenfatning.fokal",
     "konklusion_og_plan.konklusion_tekst",
     "konklusion_og_plan.plan",
-    "konklusion_og_plan.sammenfatning_soevmnoenster",
-    "konklusion_og_plan.sammenfatning_soevn_dagtid",
 }
 
 NOMINALE_FELTER = {
-    "patient.koen",
     "patient.navn",
     "patient.cpr-nummer",
-    "patient.foedselsdag",
     "test_oplysninger.dato",
     "test_oplysninger.starttid",
     "test_oplysninger.sluttid",
