@@ -147,26 +147,56 @@ def validate(data: dict, filename: str) -> list[str]:
     warnings = []
     def w(msg): warnings.append(f"  ⚠ {filename}: {msg}")
 
+    def as_number(value):
+        """Best-effort konvertering til tal (kun til validering).
+        Returnerer None hvis værdien ikke ligner et tal.
+        """
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if not text or text == "-":
+                return None
+            text = text.replace(",", ".").replace("%", "")
+            try:
+                import re
+                match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+                if not match:
+                    return None
+                return float(match.group(0))
+            except Exception:
+                return None
+        return None
+
     p = data.get("patient", {}) or {}
-    if p.get("BMI") and not (10 < p["BMI"] < 80):
-        w(f"Mistænkelig BMI: {p['BMI']}")
-    if p.get("ESS") and not (0 <= p["ESS"] <= 24):
-        w(f"ESS uden for 0-24: {p['ESS']}")
+    bmi_value = as_number(p.get("BMI"))
+    if bmi_value is not None and not (10 < bmi_value < 80):
+        w(f"Mistænkelig BMI: {p.get('BMI')}")
+
+    ess_value = as_number(p.get("ESS"))
+    if ess_value is not None and not (0 <= ess_value <= 24):
+        w(f"ESS uden for 0-24: {p.get('ESS')}")
 
     s = data.get("soevn_opsummering", {}) or {}
-    if s.get("soevneffektivitet_procent") is not None:
-        if not (0 <= s["soevneffektivitet_procent"] <= 100):
-            w(f"Søvneffektivitet uden for 0-100: {s['soevneffektivitet_procent']}")
-    if s.get("total_soevntid_tst_min") and s["total_soevntid_tst_min"] > 700:
-        w(f"TST usædvanlig høj: {s['total_soevntid_tst_min']} min")
+    sleep_eff = as_number(s.get("soevneffektivitet_procent"))
+    if sleep_eff is not None and not (0 <= sleep_eff <= 100):
+        w(f"Søvneffektivitet uden for 0-100: {s.get('soevneffektivitet_procent')}")
+
+    tst = as_number(s.get("total_soevntid_tst_min"))
+    if tst is not None and tst > 700:
+        w(f"TST usædvanlig høj: {s.get('total_soevntid_tst_min')} min")
 
     r = data.get("respirations_analyse", {}) or {}
-    if r.get("ahi_total") and r["ahi_total"] > 150:
-        w(f"AHI usædvanlig høj: {r['ahi_total']}")
+    ahi_total = as_number(r.get("ahi_total"))
+    if ahi_total is not None and ahi_total > 150:
+        w(f"AHI usædvanlig høj: {r.get('ahi_total')}")
 
     spo2 = data.get("spo2_oversigt", {}) or {}
     min_spo2 = (spo2.get("minimum_procent") or {}).get("total")
-    if min_spo2 and min_spo2 < 50:
+    min_spo2_value = as_number(min_spo2)
+    if min_spo2_value is not None and min_spo2_value < 50:
         w(f"SpO2 minimum meget lav: {min_spo2}%")
 
     return warnings
@@ -213,6 +243,10 @@ def load_local_model(
     model_name: str = DEFAULT_MODEL_NAME,
     device_preference: str = "auto",
     dtype_preference: str = "auto",
+    quantization: str = "none",
+    gpu_max_memory_gb: float | None = None,
+    device_map_preference: str = "auto",
+    trust_remote_code: bool = False,
 ):
     try:
         from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -230,23 +264,89 @@ def load_local_model(
 
     use_cuda = device_preference in {"auto", "cuda"} and cuda_available
 
+    # Light diagnostics: helps catch "wrong conda env" issues.
+    try:
+        python_exe = sys.executable
+    except Exception:
+        python_exe = "(ukendt)"
+
+    print(
+        "Runtime: "
+        f"python={python_exe}  "
+        f"torch={getattr(torch, '__version__', '?')}  "
+        f"cuda_available={cuda_available}"
+    )
+    if cuda_available:
+        try:
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+        except Exception:
+            pass
+
     if dtype_preference == "auto":
-        torch_dtype = torch.float16 if use_cuda else torch.float32
+        dtype = torch.float16 if use_cuda else torch.float32
     elif dtype_preference == "float16":
-        torch_dtype = torch.float16
+        dtype = torch.float16
     elif dtype_preference == "bfloat16":
-        torch_dtype = torch.bfloat16
+        dtype = torch.bfloat16
     else:
-        torch_dtype = torch.float32
+        dtype = torch.float32
+
+    quantization_config = None
+    if quantization != "none":
+        if not use_cuda:
+            raise RuntimeError("Kvantisering kræver CUDA (bitsandbytes). Vælg --device cuda eller --device auto med CUDA.")
+
+        try:
+            from transformers import BitsAndBytesConfig
+        except Exception:
+            print(
+                "FEJL: Kvantisering kræver bitsandbytes. Prøv: pip install bitsandbytes\n"
+                "(og sørg for at du bruger en CUDA-build af PyTorch)."
+            )
+            sys.exit(1)
+
+        if quantization == "8bit":
+            quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        elif quantization == "4bit":
+            compute_dtype = dtype if dtype in {torch.float16, torch.bfloat16} else torch.float16
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=compute_dtype,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+        else:
+            raise ValueError("Ugyldig kvantisering. Brug: none, 8bit, 4bit")
+
+    max_memory = None
+    if use_cuda and gpu_max_memory_gb is not None:
+        max_memory = {
+            0: f"{gpu_max_memory_gb}GiB",
+            "cpu": "128GiB",
+        }
+
+    if device_map_preference not in {"auto", "cuda"}:
+        raise ValueError("Ugyldig --device-map. Brug: auto eller cuda")
+
+    if device_map_preference == "cuda" and not use_cuda:
+        raise RuntimeError("--device-map cuda kræver at CUDA er tilgængelig (brug --device cuda i psg-gpu env).")
+
+    if device_map_preference == "cuda":
+        resolved_device_map = {"": 0}
+    else:
+        resolved_device_map = "auto" if use_cuda else None
 
     print(f"Indlæser lokal model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=token, trust_remote_code=trust_remote_code)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         token=token,
-        torch_dtype=torch_dtype,
-        device_map="auto" if use_cuda else None,
-        low_cpu_mem_usage=True
+        dtype=None if quantization == "8bit" else dtype,
+        device_map=resolved_device_map,
+        low_cpu_mem_usage=True,
+        max_memory=max_memory,
+        quantization_config=quantization_config,
+        trust_remote_code=trust_remote_code,
     )
     model.eval()
 
@@ -262,8 +362,19 @@ def load_local_model(
     else:
         print("Valgt enhed ved opstart: ukendt")
 
+    # If user asked for CUDA but everything landed on CPU, it's almost always a misconfig.
+    if use_cuda and selected_devices and all(d in {"cpu", "disk"} for d in selected_devices):
+        msg = (
+            "ADVARSEL: CUDA er tilgængelig, men modellen blev placeret på CPU via device_map. "
+            "Det kan ske hvis du kører i et env uden korrekt CUDA-stack, eller hvis Transformers vælger CPU-offload. "
+            "Prøv: --device-map cuda (forcer weights på GPU), eller brug --gpu-max-memory-gb 16 for headroom."
+        )
+        print(msg)
+        if device_preference == "cuda":
+            raise RuntimeError("Bad device placement: --device cuda men device_map endte på CPU. Se advarslen ovenfor.")
+
     if use_cuda:
-        print(f"CUDA aktiv: kører med {torch_dtype} og device_map='auto'")
+        print(f"CUDA aktiv: kører med {dtype} og device_map='auto'")
     else:
         print("CUDA ikke tilgængelig i denne Python-installation; kører på CPU.")
 
@@ -283,7 +394,16 @@ def parse_json_response(raw):
 
     return json.loads(text)
 
-def extract_from_text(tokenizer, model, text: str, max_retries: int = 3) -> dict:
+def extract_from_text(
+    tokenizer,
+    model,
+    text: str,
+    max_retries: int = 3,
+    max_new_tokens: int = 4096,
+    max_input_tokens: int | None = None,
+    use_cache: bool = True,
+    debug_label: str | None = None,
+) -> dict:
     import torch
 
     # Tweak the prompt slightly to force strict JSON start/end
@@ -300,7 +420,12 @@ def extract_from_text(tokenizer, model, text: str, max_retries: int = 3) -> dict
         messages, tokenize=False, add_generation_prompt=True
     )
     model_input_device = _resolve_model_input_device(model, torch)
-    inputs = tokenizer(formatted, return_tensors="pt").to(model_input_device)
+    inputs = tokenizer(
+        formatted,
+        return_tensors="pt",
+        truncation=max_input_tokens is not None,
+        max_length=max_input_tokens,
+    ).to(model_input_device)
 
     last_error = None
     for attempt in range(1, max_retries + 1):
@@ -309,21 +434,39 @@ def extract_from_text(tokenizer, model, text: str, max_retries: int = 3) -> dict
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
-                    max_new_tokens=4096,
+                    max_new_tokens=max_new_tokens,
                     do_sample=False, 
-                    pad_token_id=tokenizer.eos_token_id
+                    pad_token_id=tokenizer.eos_token_id,
+                    use_cache=use_cache,
                 )
 
             new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
             raw = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
             return parse_json_response(raw)
 
+        except torch.cuda.OutOfMemoryError as e:
+            last_error = e
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+            except Exception:
+                pass
+            if attempt < max_retries:
+                time.sleep(2)
+
         except json.JSONDecodeError as e:
             last_error = e
             print(f"\n[Forsøg {attempt}] JSON Parse Fejl: {e}")
             
             # Save the raw output to a file for easy debugging
-            debug_file = Path("failed_output_debug.txt")
+            if debug_label:
+                filename = f"failed_{debug_label}"
+                if not filename.endswith(".txt"):
+                    filename += ".txt"
+                debug_file = Path(filename)
+            else:
+                debug_file = Path("failed_output_debug.txt")
             debug_file.write_text(raw, encoding="utf-8")
             print(f"  --> Gemte det rå, fejlede output i {debug_file.resolve()}")
             
@@ -346,6 +489,9 @@ def process_file(
     tokenizer,
     model,
     model_name: str,
+    max_new_tokens: int = 4096,
+    max_input_tokens: int | None = None,
+    use_cache: bool = True,
     verbose: bool = False
 ) -> dict:
 
@@ -354,7 +500,15 @@ def process_file(
     if verbose:
         print(f"  Tekst: {len(text)} tegn")
 
-    data = extract_from_text(tokenizer, model, text)
+    data = extract_from_text(
+        tokenizer,
+        model,
+        text,
+        max_new_tokens=max_new_tokens,
+        max_input_tokens=max_input_tokens,
+        use_cache=use_cache,
+        debug_label=input_path.name,
+    )
 
     data["metadata"]["filnavn"]    = input_path.stem
     data["metadata"]["udfyldt_af"] = model_name
@@ -378,20 +532,26 @@ def process_file(
 # Batch
 # ---------------------------------------------------------------------------
 
-def process_batch(
-    input_dir: Path,
-    output_dir: Path,
-    tokenizer,
-    model,
-    model_name: str,
-    verbose: bool = False
-):
+def process_batch(input_dir, 
+                  output_dir, 
+                  tokenizer, 
+                  model, 
+                  model_name, 
+                  verbose=False, 
+                  max_filer=None,
+                  max_new_tokens: int = 4096,
+                  max_input_tokens: int | None = None,
+                  use_cache: bool = True,
+                  ):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     txt_files = sorted(input_dir.glob("*.txt"))
     if not txt_files:
         print(f"Ingen .txt filer fundet i: {input_dir}")
         return
+    
+    if max_filer:
+        txt_files = txt_files[:max_filer]
 
     print(f"Fandt {len(txt_files)} filer. Starter udtrækning med model: {model_name}")
 
@@ -411,7 +571,17 @@ def process_batch(
             if verbose:
                 tqdm.write(f"\n→ {txt_file.name}")
 
-            process_file(txt_file, out_file, tokenizer, model, model_name=model_name, verbose=verbose)
+            process_file(
+                txt_file,
+                out_file,
+                tokenizer,
+                model,
+                model_name=model_name,
+                max_new_tokens=max_new_tokens,
+                max_input_tokens=max_input_tokens,
+                use_cache=use_cache,
+                verbose=verbose,
+            )
             ok += 1
 
         except Exception as e:
@@ -448,10 +618,17 @@ def main():
     p.add_argument("--token",         "-t",  help="Hugging Face token")
     p.add_argument("--model", default=DEFAULT_MODEL_NAME, help="Hugging Face model-id (fx google/gemma-3-4b-it)")
     p.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto", help="Foretrukket model-enhed")
+    p.add_argument("--device-map", choices=["auto", "cuda"], default="auto", help="Placering af model weights: auto (kan offloade) eller cuda (forcer GPU)")
     p.add_argument("--dtype", choices=["auto", "float16", "bfloat16", "float32"], default="auto", help="Model-dtype")
+    p.add_argument("--quant", choices=["none", "8bit", "4bit"], default="none", help="Kvantisering (CUDA). Sænker VRAM-forbrug.")
+    p.add_argument("--gpu-max-memory-gb", type=float, default=None, help="Maks VRAM til weights (GiB). Efterlader headroom til generation.")
+    p.add_argument("--max-new-tokens", type=int, default=4096, help="Max tokens modellen må generere")
+    p.add_argument("--max-input-tokens", type=int, default=None, help="Trunker input til dette antal tokens (kan reducere VRAM)\n")
+    p.add_argument("--no-cache", action="store_true", help="Deaktiver KV-cache (lavere VRAM, men langsommere)")
+    p.add_argument("--trust-remote-code", action="store_true", help="Tillad trust_remote_code for modeller der kræver det")
     p.add_argument("--verbose",       "-v",  action="store_true", help="Vis detaljeret output")
     p.add_argument("--print",         "-p",  action="store_true", dest="do_print", help="Udskriv JSON i terminalen")
-
+    p.add_argument("--max", type=int, default=None, dest="max_filer", help="Maks antal filer at behandle (til test)")
     args = p.parse_args()
 
     token = args.token or os.environ.get("HF_TOKEN")
@@ -465,12 +642,28 @@ def main():
         model_name=model_name,
         device_preference=args.device,
         dtype_preference=args.dtype,
+        quantization=args.quant,
+        gpu_max_memory_gb=args.gpu_max_memory_gb,
+        device_map_preference=args.device_map,
+        trust_remote_code=args.trust_remote_code,
     )
+
+    use_cache = not args.no_cache
 
     if args.input:
         input_path  = Path(args.input)
         output_path = Path(args.output) if args.output else input_path.with_suffix(".json")
-        result = process_file(input_path, output_path, tokenizer, model, model_name=model_name, verbose=True)
+        result = process_file(
+            input_path,
+            output_path,
+            tokenizer,
+            model,
+            model_name=model_name,
+            max_new_tokens=args.max_new_tokens,
+            max_input_tokens=args.max_input_tokens,
+            use_cache=use_cache,
+            verbose=True,
+        )
 
         if args.do_print:
             print()
@@ -480,7 +673,18 @@ def main():
     if args.mappe:
         input_dir  = Path(args.mappe)
         output_dir = Path(args.output_mappe) if args.output_mappe else input_dir.parent / "resultater"
-        process_batch(input_dir, output_dir, tokenizer, model, model_name=model_name, verbose=args.verbose)
+        process_batch(
+            input_dir,
+            output_dir,
+            tokenizer,
+            model,
+            model_name=model_name,
+            verbose=args.verbose,
+            max_filer=args.max_filer,
+            max_new_tokens=args.max_new_tokens,
+            max_input_tokens=args.max_input_tokens,
+            use_cache=use_cache,
+        )
         return
 
     p.print_help()
