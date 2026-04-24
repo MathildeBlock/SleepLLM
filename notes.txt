@@ -1,0 +1,1 @@
+python SleepLLM/psg_extract-opti.py --mappe val-subset --output-mappe val-subset-llm-opti --model Qwen/Qwen2.5-14B-Instruct --device cuda --dtype bfloat16 --quant 4bit --max-new-tokens 4096
