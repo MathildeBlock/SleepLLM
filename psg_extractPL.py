@@ -217,7 +217,7 @@ def validate(data: dict, filename: str) -> list[str]:
 # Model loading
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_NAME = "google/gemma-3-1b-it"
+DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-14B-Instruct"
 
 
 def _normalize_device_name(device_value):
