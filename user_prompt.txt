@@ -1,0 +1,11 @@
+Udtræk alle oplysninger fra denne PSG-rapport og udfyld JSON-skemaet.
+
+<rapport>
+{text}
+</rapport>
+
+<skema>
+{schema}
+</skema>
+
+JSON:

@@ -119,36 +119,13 @@ _SCHEMA_STR = json.dumps(SCHEMA, ensure_ascii=False, indent=2)
 # Prompts
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """Du er en præcis dataekstraktor specialiseret i polysomnografi (PSG) rapporter på dansk.
-Din opgave er at udtrække strukturerede data fra kliniske søvnrapporter og returnere dem som JSON. Du skal følge reglerne.
+PROMPTS_DIR = Path(__file__).parent
 
-Regler:
-- Returner KUN gyldigt JSON — ingen tekst før eller efter.
-- Du må ikke ændre på JSON skemaet, kun udfylde det.
-- Brug null for felter der ikke findes i rapporten.
-- Tomme felter er udfyldt med "-" i preprocessering, det skal forstås som null.
-- Kopier værdier PRÆCIST som de står i rapporten — ingen konvertering, ingen fortolkning.
-- Tal der står som tal forbliver tal: 42.5 ikke "42.5".
-- Komma som decimaltegn erstattes med punktum: 35,5 → 35.5.
-- Procenter som tal uden %-tegn: 85.3 ikke "85.3%".
-- Tidsværdier kopieres præcist: "07:41:30" forbliver "07:41:30", "461 min" forbliver "461 min".
-- Datoer kopieres præcist som de står i rapporten.
-- "starttid" og "sluttid" er to separate felter — split fra "starttid-sluttid" hvis de står samlet.
-- "cpr-nummer" er KUN CPR-nummeret i formatet DDMMYY-XXXX.
-- "arousals" har to underfelter: "total" (antal) og "indeks" (per time).
-- "sammenfatning" indeholder fritekstfelter — bevar den originale tekst fra rapporten."""
+with open(PROMPTS_DIR / "system_prompt.txt", "r", encoding="utf-8") as f:
+    SYSTEM_PROMPT = f.read()
 
-USER_PROMPT_TEMPLATE = """Udtræk alle oplysninger fra denne PSG-rapport og udfyld JSON-skemaet.
-
-<rapport>
-{text}
-</rapport>
-
-<skema>
-{schema}
-</skema>
-
-JSON:"""
+with open(PROMPTS_DIR / "user_prompt.txt", "r", encoding="utf-8") as f:
+    USER_PROMPT_TEMPLATE = f.read()
 
 # Sentinel der signalerer at producer er færdig
 _QUEUE_DONE = object()
