@@ -259,10 +259,8 @@ def plot_heatmap(detaljer_per_par, felt_stats, ud_mappe, top_n=30):
         (f.split(".")[-2] + "." if "." in f else "") + f.split(".")[-1]
         for f in felter
     ]
-    kort_par = [
-        re.sub(r"(output-|\.json)", "", p.split("↔")[0].strip())
-        for p in par_navne
-    ]
+    # Kolonne-labels: brug blot 1..N for at undgå lange filnavne i heatmap
+    kort_par = [str(i + 1) for i in range(len(par_navne))]
 
     fig_h = max(6, len(felter) * 0.38)
     fig_w = max(8, len(par_navne) * 1.1 + 3)
