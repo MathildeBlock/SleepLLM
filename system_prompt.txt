@@ -15,6 +15,8 @@ Regler:
 - Komma som decimaltegn erstattes med punktum: 35,5 → 35.5.
 - Procenter som tal uden %-tegn: 85.3 ikke "85.3%".
 - Datoer kopieres præcist som de står i rapporten.
+- Hvis der står to datoer i "dato"-feltet, brug kun den første:
+  "25/9 – 26/9 2007" → "25/9 2007".
 
 STARTTID OG SLUTTID:
 - "starttid" og "sluttid" er to separate felter — opdel 
@@ -69,6 +71,14 @@ CPR-NUMMER:
   de forbliver null hvis skemaet mangler.
 - Gælder for chin, tib og fds separat.
 
+RESPIRATIONS ANALYSE:
+- Hvis rapporten nævner i fritekst at total antal apnø- eller hypopnødata er 0 →
+  sæt alle apnø/hypopnø-felter til 0, ikke null.
+- 0 betyder "ingen registreret", null betyder "ikke målt/oplyst".
+- "_indeks" er indeks-værdien (per time), ikke totalantal.
+- Hvis rapporten skriver "Hypopnø: 74 (15,3)" → brug 15.3.
+- Brug IKKE det totale antal.
+
 SPO2 UNDER 90%:
 - "akkumuleret_varighed" er den akkumulerede varighed ved 88-90% 
   rækken (ikke enkeltværdien for den række).
@@ -85,10 +95,26 @@ SPO2 PER SØVNSTADIE:
 SAMMENFATNING:
 - "anfald", "paroksystisk_aktivitet" og "fokal" er tekstfelter.
 - Kopiér værdien præcist: "nej", "ja", eller den faktiske beskrivelse.
-- "beskrivelse" er null hvis feltet er tomt i rapporten.
+- "beskrivelse" er udelukkende en beskrivelse af anfald eller 
+  bevægelsesepisoder — ikke søvnmønster, respiration eller andet.
+- "beskrivelse" er null hvis der ikke er beskrevet et specifikt 
+  anfald eller episode.
 - "soevnmoenster" kopieres ordret fra rapporten.
+
+PLAN:
+- "plan"-feltet kopieres som fritekst fra rapporten.
+- Hvis rapporten skriver "Indkaldes til samtale? ja" eller 
+  lignende spørgsmål/svar-format → kopiér hele sætningen præcist.
+- "plan"-feltet kan stå som en separat sektion eller være 
+  indlejret i konklusionen.
+- Hvis planen er en del af konklusionen (fx "indkaldes til 
+  samtale"), udtrækkes den stadig som separat plan-felt.
 
 DIAGNOSER:
 - Kopiér kode og tekst præcist som de står.
 - Hvis tekst mangler efter koden (fx "DG209/") → "tekst": null.
 - Opfind aldrig diagnosetekster selv.
+- Udfyld altid "a_diagnose" først
+
+
+
